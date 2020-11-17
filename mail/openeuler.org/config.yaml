@@ -1,0 +1,236 @@
+# configmap for mail exim4 service, these three files are directly read from exim config folder
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mailman-exim4-configmap
+  namespace: mail
+data:
+  25_mm3_macros: |
+    # Place this file at
+    # /etc/exim4/conf.d/main/25_mm3_macros
+
+    domainlist mm3_domains=openeuler.org
+    MM3_LMTP_HOST=mailman-core-0.mail-suit-service.mail.svc.cluster.local
+    MM3_LMTP_PORT=8024
+    # According to the configuration of: https://mailman.readthedocs.io/en/release-3.0/src/mailman/docs/MTA.html
+    # We need updating this, for the purpose of delivering emails to the mailman
+    MM3_HOME=/opt/mailman/var
+
+    ################################################################
+    # The configuration below is boilerplate:
+    # you should not need to change it.
+
+    # The path to the list receipt (used as the required file when
+    # matching list addresses)
+    MM3_LISTCHK=MM3_HOME/lists/${local_part}.${domain}
+  
+  00_local_macros: |
+    DKIM_CANON = relaxed
+    DKIM_SELECTOR = 20190905
+    DKIM_DOMAIN = openeuler.org
+    DKIM_FILE = /etc/exim4/dkim/openeuler.org-private.pem
+    DKIM_PRIVATE_KEY=${if exists{DKIM_FILE}{DKIM_FILE}{0}}
+
+  55_mm3_transport: |
+    # Place this file at
+    # /etc/exim4/conf.d/transport/55_mm3_transport
+
+    mailman3_transport:
+      debug_print = "Email for mailman"
+      driver = smtp
+      protocol = lmtp
+      allow_localhost
+      hosts = MM3_LMTP_HOST
+      port = MM3_LMTP_PORT
+      rcpt_include_affixes = true
+
+  455_mm3_router: |
+    # Place this file at
+    # /etc/exim4/conf.d/router/455_mm3_router
+
+    mailman3_router:
+      driver = accept
+      domains = +mm3_domains
+      require_files = MM3_LISTCHK
+      local_part_suffix_optional
+      local_part_suffix = -admin : \
+         -bounces   : -bounces+* : \
+         -confirm   : -confirm+* : \
+         -join      : -leave     : \
+         -owner     : -request   : \
+         -subscribe : -unsubscribe
+      transport = mailman3_transport
+
+  update-exim4-conf.conf: |
+    dc_eximconfig_configtype='internet'
+    dc_other_hostnames='openeuler.org;'
+    dc_local_interfaces=''
+    dc_readhost=''
+    # NOTE: Do not used wildchart here, use `dc_relay_nets` to control which IP is valid.
+    dc_relay_domains=''
+    dc_minimaldns='false'
+    # NOTE: Please update this into the correct CIDR of the cluster pods.
+    dc_relay_nets='172.17.0.0/16'
+    dc_smarthost=''
+    CFILEMODE='644'
+    dc_use_split_config='true'
+    dc_hide_mailname=''
+    dc_mailname_in_oh='true'
+    dc_localdelivery='mail_spool'
+
+# configmap for mail web service
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mailman-web-configmap
+  namespace: mail
+data:
+  settings_local.py: |
+    import os
+    import socket
+    import ipaddress
+
+    DEBUG = True
+
+    EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+    #NOTE: this is the MTA host, we need to update it.
+    EMAIL_HOST = 'mailman-exim4-service.mail.svc.cluster.local'
+    EMAIL_PORT = 25
+    
+    mailman_ip_address = socket.gethostbyname(os.environ.get('MAILMAN_HOST_IP')).split('.')
+    mailman_ip_cidr = "{0}.{1}.0.0/16".format(mailman_ip_address[0], mailman_ip_address[1])
+    MAILMAN_ARCHIVER_FROM = [str(ip) for ip in ipaddress.IPv4Network(mailman_ip_cidr)]
+
+    SERVICE_IP = socket.gethostbyname("mailweb.openeuler.org") 
+
+    ALLOWED_HOSTS = [
+        "localhost",  # Archiving API from Mailman, keep it.
+        # Add here all production URLs you may have.
+        "mailman-database-0.mail-suit-service.mail.svc.cluster.local",
+        "mailman-core-0.mail-suit-service.mail.svc.cluster.local",
+        "mailman-web-0.mail-suit-service.mail.svc.cluster.local",
+        "mailman-web-service.mail.svc.cluster.local",
+        #NOTE: This is the public ip address of the served host
+        "openeuler.org",
+        "mailweb.openeuler.org",
+        "mail.openeuler.org",
+        "mailman-web",
+        SERVICE_IP,
+        os.environ.get('SERVE_FROM_DOMAIN'),
+        os.environ.get('DJANGO_ALLOWED_HOSTS'),
+    ]
+
+    COMPRESS_CSS_HASHING_METHOD = 'content'
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mailman-webpage-hack
+  namespace: mail
+data:
+  summary.html: |
+    {% extends "postorius/base.html" %}
+    {% load i18n %}
+    {% load bootstrap_tags %}
+    {% load nav_helpers %}
+
+    {% block head_title %}
+    {% trans 'Info' %} | {{ list.fqdn_listname }} - {{ block.super }}
+    {% endblock %}
+
+    {% block content %}
+
+    {% list_nav 'list_summary' 'Summary' %}
+
+    <p>{{ list.settings.description }}</p>
+    {% if list.settings.info %}
+    <p><pre style="white-space: pre-wrap; word-break: normal; border: none; background: none;">{{ list.settings.info }}</pre></p>
+    {% endif %}
+    <p>{% trans 'To contact the list owners, use the following email address:' %} <em>{{ list.settings.owner_address }}</em></p>
+
+    {# Archives #}
+    {% if hyperkitty_enabled %}
+    {% if not public_archive and not user.is_authenticated %}
+    <p>
+        {% trans 'You have to login to visit the archives of this list.' %}
+    </p>
+    {% else %}
+    {% url 'hk_list_overview' list.fqdn_listname as hyperkitty_list_url %}
+    <p>
+        {% blocktrans %}
+        To see the prior postings to this list, visit
+        <a href="{{ hyperkitty_list_url }}">the archives</a>.
+        {% endblocktrans %}
+    </p>
+    {% endif %}
+    {% endif %}
+
+    <hr />
+
+    {# Subscription #}
+    {% if user.is_authenticated %}
+    {% if user_subscribed %}
+    <h2>{% trans 'Subscription / Unsubscription' %}</h2>
+    <p>
+        {% trans 'You are subscribed to this list with the following address:' %} <em>{{ subscribed_address }}</em>
+    </p>
+    {% url 'user_list_options' list.list_id as user_list_options_url %}
+    <p>
+        {% blocktrans %}
+        You can manage your subscription on <a href="{{ user_list_options_url }}">your list options page</a>
+        {% endblocktrans %}
+    </p>
+    <p>
+    <form method="post" action="{% url 'list_unsubscribe' list.list_id %}">
+        {% csrf_token %}
+        <input type="hidden" name="email" value="{{ subscribed_address }}" />
+        <button type="submit" class="btn btn-danger">{% trans 'Unsubscribe' %}</button>
+    </form>
+    </p>
+    {% elif user_request_pending %}
+    <h4>{% trans "You have a subscription request pending. If you don't hear back soon, please contact the list owners." %}</h4>
+    {% else %}
+    <h2>{% trans 'Subscribe to this list' %}</h2>
+    <p>
+        {% blocktrans with address=list.settings.join_address %}
+        To subscribe you can send an email with 'subscribe' in the subject to
+        <a href="mailto:{{ address }}?subject=Subscribe">{{ address }}</a>
+        or use the form below:
+        {% endblocktrans %}
+    </p>
+    <form action="{% url 'list_subscribe' list.list_id %}" method="post" class="form-horizontal">
+        {% bootstrap_form_horizontal subscribe_form 2 8 'Subscribe' %}
+    </form>
+    {% endif %}
+    {% else %}
+    <div>
+        <p>
+            {% blocktrans %}
+            You can also subscribe without creating an account.
+            If you wish to do so, please use the form below.
+            {% endblocktrans%}
+        </p>
+        <form action="{% url 'list_anonymous_subscribe' list.list_id %}"
+              method="post" class="form-horizontal">
+            {% bootstrap_form_horizontal anonymous_subscription_form 2 8 'Subscribe' %}
+        </form>
+    </div>
+    {% endif %}
+
+    {# List metrics #}
+    {% if user.is_authenticated %}
+    {% if user.is_list_owner or user.is_superuser %}
+    <hr />
+    <h3>{% trans 'List metrics' %}</h3>
+    <dl class="dl-horizontal">
+        <dt>{% trans 'Created at' %}</dt><dd>{{ list.settings.created_at }}</dd>
+        <dt>{% trans 'Last post at' %}</dt><dd>{{ list.settings.last_post_at }}</dd>
+        <dt>{% trans 'Digest last sent at' %}</dt><dd>{{ list.settings.digest_last_sent_at }}</dd>
+        <dt>{% trans 'Volume' %}</dt><dd>{{ list.settings.volume }}</dd>
+    </dl>
+    {% endif %}
+    {% endif %}
+    {% endblock %}
