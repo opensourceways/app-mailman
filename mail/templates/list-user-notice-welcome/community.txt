@@ -1,0 +1,17 @@
+欢迎加入"$display_name"邮件列表！
+
+如果需要发起讨论，请直接发送邮件到:
+   $listname
+如果需要取消订阅或者调整您的的订阅参数，请发送邮件到:
+   $request_email
+
+
+
+
+Welcome to the "$display_name" mailing list!
+
+To post to this list, send your email to:
+  $listname
+You can unsubscribe or make adjustments to your options via email by
+sending a message to:
+  $request_email
