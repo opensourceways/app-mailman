@@ -1,0 +1,25 @@
+作为邮件列表管理员，下面的邮件列表请求需要你的授权：
+
+    邮件列表： $listname
+    发件人： $sender_email
+    主题： $subject
+    拦截原因： $reasons
+
+如果方便，请访问管理系统以批准或拒绝请求
+
+
+
+
+As list administrator, your authorization is requested for the
+following mailing list posting:
+
+    List:    $listname
+    From:    $sender_email
+    Subject: $subject
+
+The message is being held because:
+
+$reasons
+
+At your convenience, visit your dashboard to approve or deny the
+request.
