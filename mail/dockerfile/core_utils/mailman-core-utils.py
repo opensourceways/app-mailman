@@ -1,20 +1,17 @@
-import requests
 import os
 import signal
+import logging
 from mailmanclient import Client
 from http.server import SimpleHTTPRequestHandler, HTTPServer
-
 
 # This file used to create the default domain, list and welcome templates
 # for mail list
 # the configuration are listed below:
-MAILMAN_CORE_ENDPOINT = os.environ.get(
-    "MAILMAN_CORE_ENDPOINT",
-    'http://mailman-core-0.mail-suit-service.default.svc.cluster.local:8001/3.1')
+MAILMAN_CORE_ENDPOINT = os.environ.get("MAILMAN_CORE_ENDPOINT", 'https://api.osinfra.cn/mailman/3.1')
 
 MAILMAN_CORE_USER = os.environ.get("MAILMAN_CORE_USER", "restadmin")
 
-MAILMAN_CORE_PASSWORD = os.environ.get("MAILMAN_CORE_PASSWORD", "restpass")
+MAILMAN_CORE_PASSWORD = os.environ.get("MAILMAN_CORE_PASSWORD", "restpass@osinfra")
 
 DEFAULT_DOMAIN_NAME = os.environ.get("DEFAULT_DOMAIN_NAME", "openeuler.org")
 
@@ -30,6 +27,10 @@ TEMPLATE_FOLDER_CONVERSION_EXCEPTION = {
     "domain-admin-notice-new-list": "domain:admin:notice:new-list",
     "list-user-notice-no-more-today": "list:user:notice:no-more-today",
 }
+
+LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
+logging.basicConfig(filename='./templates.log', level=logging.INFO, format=LOG_FORMAT)
+page = 1
 
 
 class TemplateHandler(SimpleHTTPRequestHandler):
@@ -51,99 +52,86 @@ class SignalException(Exception):
     pass
 
 
+def download_code():
+    if os.path.exists(os.path.join(os.getcwd(), 'app-mailman')):
+        os.system('cd app-mailman; git pull')
+    else:
+        os.system('git clone https://gitee.com/liuqi469227928/app-mailman.git;')
+
+
 def prepare_list():
     # pre-check before handling mailman core service
-    if DEFAULT_DOMAIN_NAME == "":
-        print("Must specify 'DEFAULT_DOMAIN_NAME' for mail list preparation.")
+    templates_path = os.path.join(os.getcwd(), 'app-mailman/mail', TEMPLATE_FOLDER_PATH)
+    if not os.path.exists(templates_path):
+        print("The template file folder 'TEMPLATE_FOLDER_PATH' must exits on local.")
         exit(1)
-
-    lists = str.split(str(DEFAULT_MAIL_LISTS).lower(), ",")
-    if not os.path.exists(TEMPLATE_FOLDER_PATH):
-        print("The template file folder 'DEFAULT_MAIL_LISTS' must exits on"
-              " local.")
-        exit(1)
-
-    if len(lists) == 0:
-        # find out all of the lists from local folder.
-        local_file = []
-        for _, _, f in os.walk(os.path.join(os.getcwd(),
-                                            TEMPLATE_FOLDER_PATH)):
-            for file in f:
-                if file.endswith(".txt"):
-                    local_file.append(os.path.splitext(file)[0])
-        lists = list(set(local_file))
-
     client = Client(MAILMAN_CORE_ENDPOINT,
                     MAILMAN_CORE_USER,
                     MAILMAN_CORE_PASSWORD)
+    domains = client.domains
+    for domain in domains:
+        common_path = os.path.join(templates_path, domain.mail_host, 'common')
+        common_templates = list(filter(lambda x: x.endswith('.txt'), os.listdir(common_path)))
+        if common_templates:
+            for txt_file in common_templates:
+                template_name = txt_file.rsplit('.txt')[0].replace('-', ':')
+                uri = MAILMAN_CORE_ENDPOINT + os.path.abspath(txt_file)
+                try:
+                    domain.set_template(template_name, uri)
+                    logging.info('set common template'
+                                 'domain:{} \r\n'
+                                 'template name:{} \r\n'
+                                 'uri:{}'.format(template_name, os.path.abspath(txt_file), uri))
+                    print('set common template'
+                          'domain:{} \r\n'
+                          'template name:{} \r\n'
+                          'uri:{}'.format(template_name, os.path.abspath(txt_file), uri))
+                except Exception as e:
+                    logging.error(e)
+                    exit(1)
 
-    # Create default domain if not exists
-    default_domain = client.get_domain(DEFAULT_DOMAIN_NAME)
-    if default_domain is None:
-        default_domain = client.create_domain(DEFAULT_DOMAIN_NAME)
+        existing_lists = domain.lists
+        list_dirs = os.listdir(os.path.join(templates_path, domain.mail_host))
+        list_dirs.remove('common')
+        for list_dir in list_dirs:
+            if list_dir not in existing_lists:
+                domain.create_list(list_dir)
+                logging.info('create list \r\n'
+                             'domain: {} \r\n'
+                             'list: {}'.format(domain.mail_host, list_dir))
 
-    # Create default mail lists
-    existing_lists = [el.list_name for el in client.lists]
-    for l in lists:
-        if l in existing_lists:
-            print("skip creating list {0}, since it's already exist".format(l))
-            continue
-        else:
-            print("starting to create mail list {0}".format(l))
-            default_domain.create_list(l)
-
-    # Patch template for lists
-    for l in lists:
-        # browse all of the dirs and find out the template files
-        existing_folders = [
-            f for f in os.listdir(
-                os.path.join(os.getcwd(), TEMPLATE_FOLDER_PATH))]
-        for d in existing_folders:
-            # check the list file exists
-            local_file = get_template_file(d, l)
-            if os.path.exists(local_file):
-                patch_content = {
-                    convert_name_to_substitution(d): get_templates_url(d, l)
-                }
-            elif os.path.exists(get_base_template_file(d)):
-                patch_content = {
-                    convert_name_to_substitution(d): get_templates_url(d, "base")
-                }
-            else:
-                print("could not found template file for list {0}, path {1}, "
-                      "skipping".format(l, local_file))
+        for maillist in domain.lists:
+            try:
+                list_text_dirs = os.listdir(os.path.join(templates_path, domain.mail_host, maillist.list_name))
+            except FileNotFoundError:
                 continue
-            patch_uri = "{0}/lists/{1}.{2}/uris".format(
-                MAILMAN_CORE_ENDPOINT,
-                l,
-                DEFAULT_DOMAIN_NAME)
-            response = requests.patch(
-                patch_uri, patch_content,
-                auth=(MAILMAN_CORE_USER, MAILMAN_CORE_PASSWORD))
-            print("patching list {0} with template file {1}, result {2} {3}"
-                  "".format(l, local_file, response.status_code, response.text))
-
-
-def convert_name_to_substitution(dir_name):
-    if dir_name in TEMPLATE_FOLDER_CONVERSION_EXCEPTION:
-        return TEMPLATE_FOLDER_CONVERSION_EXCEPTION[dir_name]
-    return str(dir_name).replace("-", ":")
-
-
-def get_templates_url(dir_name, list_name):
-    return "http://{0}:{1}/templates/{2}/{3}.txt".format(
-        TEMPLATE_SERVER_ADDRESS, TEMPLATE_SERVER_PORT, dir_name, list_name)
-
-
-def get_template_file(folder_name, list_name):
-    return os.path.join(os.getcwd(),
-                        TEMPLATE_FOLDER_PATH,
-                        folder_name, "{0}.txt".format(list_name))
-
-def get_base_template_file(folder_name):
-    return os.path.join(os.getcwd(),
-                        TEMPLATE_FOLDER_PATH,
-                        folder_name, "base.txt")
+            list_text_dirs = list(filter(lambda x: x.endswith('.txt'), list_text_dirs))
+            for file in list_text_dirs:
+                template_name = file.rsplit('.txt')[0].replace('-', ':')
+                uri = MAILMAN_CORE_ENDPOINT + os.path.abspath(file)
+                try:
+                    maillist.set_template(template_name, uri)
+                    logging.info('set list template \r\n'
+                                 'list: {} \r\n'
+                                 'template name: {} \r\n '
+                                 'uri: {}'.format(maillist, os.path.abspath(file), uri))
+                    print('set list template \r\n'
+                          'list: {} \r\n'
+                          'template name: {} \r\n '
+                          'uri: {}'.format(maillist, os.path.abspath(file), uri))
+                except Exception as e:
+                    logging.error(e)
+                    exit(1)
+            templates = maillist.templates
+            for template in templates:
+                if (template.name.replace(':', '-') + '.txt') not in list_text_dirs:
+                    maillist.set_template(template.name, '')
+                    logging.info('remove list template \r\n'
+                                 'list: {} \r\n'
+                                 'template name: {}'.format(maillist.list_name, template.name))
+                    print('remove list template \r\n'
+                          'list: {} \r\n'
+                          'template name: {}'.format(maillist.list_name, template.name))
 
 
 def httpd_signal_handler(signum, frame):
@@ -171,5 +159,7 @@ def running_templates_server():
 
 
 if __name__ == "__main__":
+    download_code()
     prepare_list()
     running_templates_server()
+

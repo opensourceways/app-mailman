@@ -20,18 +20,29 @@ requests.patch('http://{host}:{port}/3.1/lists/developing.example.com/uris',
               {'list:user:notice:welcome': 'http://{http_path_which_store_template_file}'},
                auth=({username}, {password}))
 ```
+## Customize templates for a list
+1. Fork the repository https://github.com/opensourceways/app-mailman first.
+2. By default, the mailing list will use the public template set in common directory. If you want to customize templates for a list, first find the domain of the maillist list under the templates directory, then find the list under the domain directory that you want to customize.
+3. Put the template file under the list. You can write the file according to the common files. But the filename should follow the standard so that can resolve to a standard template name. e.g. if you want to customize the `list:user:notice:welcome` template, the file name must be `list-user-notice-welcome.txt`. See more about the template name, you can visit https://docs.mailman3.org/projects/mailman/en/latest/src/mailman/rest/docs/templates.html.
+4. Create a pull request.Once the pull request be merged, the customised template will cover the common template. 
 
 ## Folder Structure
 Mailman's `core-utils` will help us to setting up the http server and invoke mailman's core API to patch the template, in order to
 achieve this automatically, the structure of folder `templates` are arranged below:
 
 ```$xslt
-infrastructure
-├─────────templates
-│            ├───list-user-notice-welcome            //the mail template key, all ":" will be replaced by "-"
-│            │                ├───────developing.txt
-│            │                └───────community.txt
-│            └───domain-admin-notice-new-list
-│                             └───────user.txt       //the template file which is named in the format of "{list name}.txt", Do not capitalize first letter.
+mail
+├───────templates
+│       ├───────domain1
+│       │       ├───────common  
+│       │       │       ├───────list-admin-action-post.txt
+│       │       │       ├───────list-user-action-subscribe.txt
+│       │       │       └───────list-user-notice-welcome.txt
+│       │       ├───────list1
+│       │       └───────list2
+│       │               └───────list-user-notice-welcome.txt  
+│       └───────domain2 
+
 ```
 Once the content in templates folder have been updated, we can update the mailman templates through recreating the `core-utils` pods in cluster.
+
