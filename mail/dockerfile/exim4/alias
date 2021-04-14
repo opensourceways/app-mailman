@@ -1,0 +1,13 @@
+# /etc/aliases
+# this file will be used in exim4, take care of the recipient will be replaced
+mailer-daemon: postmaster
+postmaster: root
+nobody: root
+hostmaster: root
+usenet: root
+news: root
+webmaster: root
+www: root
+ftp: root
+abuse: root
+noc: root
